@@ -1,0 +1,40 @@
+services:
+  inference:
+    build:
+      context: .
+      dockerfile: docker/inference.Dockerfile
+    container_name: fraud-inference
+    ports:
+      - "${INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - ./model_registry:/app/model_registry
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - INFERENCE_HOST=0.0.0.0
+      - INFERENCE_PORT=8000
+    restart: unless-stopped
+
+  training:
+    build:
+      context: .
+      dockerfile: docker/training.Dockerfile
+    container_name: fraud-training
+    volumes:
+      - ./model_registry:/app/model_registry
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - INFERENCE_HOST=inference
+      - INFERENCE_PORT=8000
+    depends_on:
+      inference:
+        condition: service_started
+    profiles:
+      - training
+
+volumes:
+  model_registry:
+    driver: local
