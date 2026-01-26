@@ -62,11 +62,7 @@
     <li><a href="#project-structure">Структура проекта</a></li>
     <li><a href="#testing">Тестирование</a></li>
     <li><a href="#docker">Docker</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Вклад в проект</a></li>
-    <li><a href="#license">Лицензия</a></li>
-    <li><a href="#authors">Авторы</a></li>
-    <li><a href="#acknowledgements">Благодарности</a></li>
+
   </ol>
 </details>
 
@@ -392,21 +388,3 @@ docker-compose --profile training up training
 docker-compose logs -f inference
 ```
 
----
-
-
-<!-- LICENSE -->
-## License
-
-Распространяется под лицензией MIT. См. файл `LICENSE`.
-
----
-
-<!-- AUTHORS -->
-## Authors
-
-**luckydiss** — Разработчик
-
-Ссылка на проект: [https://github.com/luckydiss/ml_fraude_service](https://github.com/luckydiss/ml_fraude_service)
-
----"# ml-fraud-service" 
