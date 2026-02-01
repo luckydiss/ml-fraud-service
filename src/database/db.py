@@ -1,5 +1,5 @@
 """
-SQLite база данных для хранения транзакций.
+SQLAlchemy база данных для хранения транзакций.
 
 Обеспечивает:
 - Хранение транзакций для обучения
@@ -7,86 +7,123 @@ SQLite база данных для хранения транзакций.
 - Выгрузка данных для обучения
 """
 
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    create_engine,
+    func,
+    text,
+)
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from src.common import get_logger, settings
 
 logger = get_logger(__name__)
 
 
+class Base(DeclarativeBase):
+    """Базовый класс для всех моделей."""
+    pass
+
+
+class Transaction(Base):
+    """Модель транзакции."""
+
+    __tablename__ = "transactions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trans_date_trans_time = Column(String, nullable=False)
+    amt = Column(Float, nullable=False)
+    lat = Column(Float, nullable=False)
+    long = Column(Float, nullable=False)
+    city_pop = Column(Integer, nullable=False)
+    merch_lat = Column(Float, nullable=False)
+    merch_long = Column(Float, nullable=False)
+    merchant = Column(String, nullable=False)
+    category = Column(String, nullable=False)
+    gender = Column(String, nullable=False)
+    job = Column(String, nullable=False)
+    dob = Column(String, nullable=False)
+    is_fraud = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_trans_date", "trans_date_trans_time"),
+        Index("idx_is_fraud", "is_fraud"),
+    )
+
+    def to_dict(self) -> dict:
+        """Конвертация в словарь."""
+        return {
+            "id": self.id,
+            "trans_date_trans_time": self.trans_date_trans_time,
+            "amt": self.amt,
+            "lat": self.lat,
+            "long": self.long,
+            "city_pop": self.city_pop,
+            "merch_lat": self.merch_lat,
+            "merch_long": self.merch_long,
+            "merchant": self.merchant,
+            "category": self.category,
+            "gender": self.gender,
+            "job": self.job,
+            "dob": self.dob,
+            "is_fraud": self.is_fraud,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class TransactionDatabase:
-    """SQLite база данных для хранения транзакций."""
-    
+    """SQLAlchemy база данных для хранения транзакций."""
+
     def __init__(self, db_path: Optional[Path] = None):
         """
         Инициализация базы данных.
-        
+
         Args:
             db_path: Путь к файлу БД. По умолчанию: data/transactions.db
         """
         self.db_path = db_path or (settings.data_path / "transactions.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.engine = create_engine(
+            f"sqlite:///{self.db_path}",
+            echo=False,
+        )
+        self.SessionLocal = sessionmaker(bind=self.engine)
+
         self._init_db()
         logger.info(f"База данных инициализирована: {self.db_path}")
-    
+
     @contextmanager
-    def _get_connection(self):
-        """Контекстный менеджер для подключения к БД."""
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
+    def _get_session(self):
+        """Контекстный менеджер для сессии БД."""
+        session = self.SessionLocal()
         try:
-            yield conn
-            conn.commit()
+            yield session
+            session.commit()
         except Exception:
-            conn.rollback()
+            session.rollback()
             raise
         finally:
-            conn.close()
-    
+            session.close()
+
     def _init_db(self):
         """Создание схемы базы данных."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Таблица транзакций
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    trans_date_trans_time TEXT NOT NULL,
-                    amt REAL NOT NULL,
-                    lat REAL NOT NULL,
-                    long REAL NOT NULL,
-                    city_pop INTEGER NOT NULL,
-                    merch_lat REAL NOT NULL,
-                    merch_long REAL NOT NULL,
-                    merchant TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    gender TEXT NOT NULL,
-                    job TEXT NOT NULL,
-                    dob TEXT NOT NULL,
-                    is_fraud INTEGER,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Индексы для быстрого поиска
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_trans_date 
-                ON transactions(trans_date_trans_time)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_is_fraud 
-                ON transactions(is_fraud)
-            """)
-            
-            logger.debug("Схема БД инициализирована")
-    
+        Base.metadata.create_all(self.engine)
+        logger.debug("Схема БД инициализирована")
+
     def insert_transaction(
         self,
         trans_date_trans_time: str,
@@ -105,168 +142,182 @@ class TransactionDatabase:
     ) -> int:
         """
         Вставка одной транзакции в БД.
-        
+
         Returns:
             int: ID вставленной записи.
         """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO transactions (
-                    trans_date_trans_time, amt, lat, long, city_pop,
-                    merch_lat, merch_long, merchant, category, gender,
-                    job, dob, is_fraud
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                trans_date_trans_time, amt, lat, long, city_pop,
-                merch_lat, merch_long, merchant, category, gender,
-                job, dob, is_fraud
-            ))
-            return cursor.lastrowid
-    
+        with self._get_session() as session:
+            transaction = Transaction(
+                trans_date_trans_time=trans_date_trans_time,
+                amt=amt,
+                lat=lat,
+                long=long,
+                city_pop=city_pop,
+                merch_lat=merch_lat,
+                merch_long=merch_long,
+                merchant=merchant,
+                category=category,
+                gender=gender,
+                job=job,
+                dob=dob,
+                is_fraud=is_fraud,
+            )
+            session.add(transaction)
+            session.flush()
+            return transaction.id
+
     def insert_many(self, transactions: List[dict]) -> int:
         """
         Пакетная вставка транзакций.
-        
+
         Args:
             transactions: Список словарей с данными транзакций.
-            
+
         Returns:
             int: Количество вставленных записей.
         """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            columns = [
-                "trans_date_trans_time", "amt", "lat", "long", "city_pop",
-                "merch_lat", "merch_long", "merchant", "category", "gender",
-                "job", "dob", "is_fraud"
-            ]
-            
-            placeholders = ", ".join(["?"] * len(columns))
-            sql = f"INSERT INTO transactions ({', '.join(columns)}) VALUES ({placeholders})"
-            
-            values = [
-                tuple(t.get(col) for col in columns)
+        with self._get_session() as session:
+            objects = [
+                Transaction(
+                    trans_date_trans_time=t.get("trans_date_trans_time"),
+                    amt=t.get("amt"),
+                    lat=t.get("lat"),
+                    long=t.get("long"),
+                    city_pop=t.get("city_pop"),
+                    merch_lat=t.get("merch_lat"),
+                    merch_long=t.get("merch_long"),
+                    merchant=t.get("merchant"),
+                    category=t.get("category"),
+                    gender=t.get("gender"),
+                    job=t.get("job"),
+                    dob=t.get("dob"),
+                    is_fraud=t.get("is_fraud"),
+                )
                 for t in transactions
             ]
-            
-            cursor.executemany(sql, values)
-            count = cursor.rowcount
+            session.bulk_save_objects(objects)
+            count = len(objects)
             logger.info(f"Вставлено {count} транзакций")
             return count
-    
+
     def load_from_csv(self, csv_path: Path, replace: bool = False) -> int:
         """
         Загрузка данных из CSV файла в БД.
-        
+
         Args:
             csv_path: Путь к CSV файлу.
             replace: Если True, очищает таблицу перед загрузкой.
-            
+
         Returns:
             int: Количество загруженных записей.
         """
         logger.info(f"Загрузка данных из CSV: {csv_path}")
-        
+
         df = pd.read_csv(csv_path)
-        
-        # Переименуем колонки если нужно
+
         required_columns = [
             "trans_date_trans_time", "amt", "lat", "long", "city_pop",
             "merch_lat", "merch_long", "merchant", "category", "gender",
             "job", "dob", "is_fraud"
         ]
-        
-        # Проверяем наличие колонок
+
         missing = set(required_columns) - set(df.columns)
         if missing:
             raise ValueError(f"Отсутствуют колонки в CSV: {missing}")
-        
+
         if replace:
             self.clear_transactions()
-        
-        # Конвертируем в список словарей
+
         transactions = df[required_columns].to_dict("records")
-        
+
         return self.insert_many(transactions)
-    
+
     def get_training_data(self, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Получение данных для обучения.
-        
+
         Args:
             limit: Максимальное количество записей. None = все.
-            
+
         Returns:
             pd.DataFrame: DataFrame с транзакциями.
         """
-        with self._get_connection() as conn:
-            query = """
-                SELECT 
-                    trans_date_trans_time, amt, lat, long, city_pop,
-                    merch_lat, merch_long, merchant, category, gender,
-                    job, dob, is_fraud
-                FROM transactions
-                WHERE is_fraud IS NOT NULL
-                ORDER BY trans_date_trans_time
-            """
-            
+        with self._get_session() as session:
+            query = (
+                session.query(Transaction)
+                .filter(Transaction.is_fraud.isnot(None))
+                .order_by(Transaction.trans_date_trans_time)
+            )
+
             if limit:
-                query += f" LIMIT {limit}"
-            
-            df = pd.read_sql_query(query, conn)
+                query = query.limit(limit)
+
+            results = query.all()
+
+            data = []
+            for t in results:
+                data.append({
+                    "trans_date_trans_time": t.trans_date_trans_time,
+                    "amt": t.amt,
+                    "lat": t.lat,
+                    "long": t.long,
+                    "city_pop": t.city_pop,
+                    "merch_lat": t.merch_lat,
+                    "merch_long": t.merch_long,
+                    "merchant": t.merchant,
+                    "category": t.category,
+                    "gender": t.gender,
+                    "job": t.job,
+                    "dob": t.dob,
+                    "is_fraud": t.is_fraud,
+                })
+
+            df = pd.DataFrame(data)
             logger.info(f"Загружено {len(df)} транзакций для обучения")
             return df
-    
+
     def count_transactions(self) -> dict:
         """
         Подсчёт количества транзакций.
-        
+
         Returns:
             dict: Статистика по транзакциям.
         """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM transactions")
-            total = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM transactions WHERE is_fraud = 1")
-            fraud = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM transactions WHERE is_fraud = 0")
-            legit = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM transactions WHERE is_fraud IS NULL")
-            unlabeled = cursor.fetchone()[0]
-            
+        with self._get_session() as session:
+            total = session.query(func.count(Transaction.id)).scalar()
+            fraud = session.query(func.count(Transaction.id)).filter(
+                Transaction.is_fraud == 1
+            ).scalar()
+            legit = session.query(func.count(Transaction.id)).filter(
+                Transaction.is_fraud == 0
+            ).scalar()
+            unlabeled = session.query(func.count(Transaction.id)).filter(
+                Transaction.is_fraud.is_(None)
+            ).scalar()
+
             return {
                 "total": total,
                 "fraud": fraud,
                 "legitimate": legit,
                 "unlabeled": unlabeled,
             }
-    
+
     def clear_transactions(self):
         """Очистка всех транзакций из БД."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM transactions")
+        with self._get_session() as session:
+            session.query(Transaction).delete()
             logger.warning("Все транзакции удалены из БД")
-    
+
     def get_recent_transactions(self, limit: int = 100) -> List[dict]:
         """Получение последних N транзакций."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM transactions
-                ORDER BY created_at DESC
-                LIMIT ?
-            """, (limit,))
-            
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+        with self._get_session() as session:
+            results = (
+                session.query(Transaction)
+                .order_by(Transaction.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [t.to_dict() for t in results]
 
 
 # Глобальный экземпляр БД (singleton)
@@ -276,7 +327,7 @@ _database: Optional[TransactionDatabase] = None
 def get_database() -> TransactionDatabase:
     """
     Получение глобального экземпляра базы данных.
-    
+
     Returns:
         TransactionDatabase: Экземпляр БД.
     """
